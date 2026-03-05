@@ -1,0 +1,96 @@
+name: Evolution
+
+on:
+  schedule:
+    - cron: '0 */8 * * *'  # every 8 hours
+  workflow_dispatch:        # manual trigger for testing
+
+permissions:
+  contents: write
+  issues: write
+  models: read             # GitHub Models / Copilot API access
+
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Setup GitHub CLI auth
+        run: gh auth status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "cocopilot-evolve[bot]"
+          git config user.email "cocopilot-evolve[bot]@users.noreply.github.com"
+
+      - name: Run evolution session (attempt 1)
+        id: attempt1
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MODEL: ${{ vars.COPILOT_MODEL || 'gpt-4o' }}
+          TIMEOUT: '3600'
+        run: python3 scripts/evolve.py
+
+      - name: Retry after 15 min (attempt 2)
+        id: attempt2
+        if: steps.attempt1.outcome == 'failure'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MODEL: ${{ vars.COPILOT_MODEL || 'gpt-4o' }}
+          TIMEOUT: '3600'
+        run: |
+          echo "Waiting 15 minutes before retry..."
+          sleep 900
+          python3 scripts/evolve.py
+
+      - name: Retry after 45 min (attempt 3)
+        if: steps.attempt1.outcome == 'failure' && steps.attempt2.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MODEL: ${{ vars.COPILOT_MODEL || 'gpt-4o' }}
+          TIMEOUT: '3600'
+        run: |
+          echo "Waiting 45 minutes before retry..."
+          sleep 2700
+          python3 scripts/evolve.py
+
+      - name: Post issue responses
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -f ISSUE_RESPONSE.md ]; then
+            ISSUE_NUM=$(grep '^issue_number:' ISSUE_RESPONSE.md | awk '{print $2}')
+            COMMENT=$(sed -n '/^comment:/,$ p' ISSUE_RESPONSE.md | sed 's/^comment: //')
+            if [ -n "$ISSUE_NUM" ] && [ -n "$COMMENT" ]; then
+              gh issue comment "$ISSUE_NUM" \
+                --repo "$REPO" \
+                --body "$COMMENT" || true
+              rm -f ISSUE_RESPONSE.md
+            fi
+          fi
