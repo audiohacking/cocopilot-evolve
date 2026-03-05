@@ -1,1 +1,5 @@
-openai>=1.0.0,<2.0.0
+# No runtime dependencies — the GitHub Copilot CLI handles all AI interactions.
+# The openai package is no longer needed.
+# Dev dependencies (for CI lint + test):
+flake8>=7.0.0
+pytest>=8.0.0

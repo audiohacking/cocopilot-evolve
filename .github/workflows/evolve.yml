@@ -8,7 +8,6 @@ on:
 permissions:
   contents: write
   issues: write
-  models: read             # GitHub Models / Copilot API access
 
 jobs:
   evolve:
@@ -26,7 +25,15 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install GitHub Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Install Python dependencies
         run: pip install -r requirements.txt
 
       - name: Setup GitHub CLI auth
@@ -43,10 +50,10 @@ jobs:
         id: attempt1
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT with "Copilot Requests" permission — stored as repo secret
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          MODEL: ${{ vars.COPILOT_MODEL || 'gpt-4o' }}
           TIMEOUT: '3600'
         run: python3 scripts/evolve.py
 
@@ -55,10 +62,9 @@ jobs:
         if: steps.attempt1.outcome == 'failure'
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          MODEL: ${{ vars.COPILOT_MODEL || 'gpt-4o' }}
           TIMEOUT: '3600'
         run: |
           echo "Waiting 15 minutes before retry..."
@@ -68,10 +74,9 @@ jobs:
       - name: Retry after 45 min (attempt 3)
         if: steps.attempt1.outcome == 'failure' && steps.attempt2.outcome == 'failure'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          MODEL: ${{ vars.COPILOT_MODEL || 'gpt-4o' }}
           TIMEOUT: '3600'
         run: |
           echo "Waiting 45 minutes before retry..."
