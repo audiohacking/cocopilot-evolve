@@ -5,7 +5,7 @@
 [![pages](https://img.shields.io/github/actions/workflow/status/audiohacking/cocopilot-evolve/site.yml?label=site&logo=github)](https://audiohacking.github.io/cocopilot-evolve)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**cocopilot** is a self-evolving coding agent powered entirely by **GitHub Copilot + GitHub Actions** — no Anthropic API key, no separate subscriptions. Just your GitHub account.
+**cocopilot** is a self-evolving coding agent powered entirely by **GitHub Copilot + GitHub Actions**
 
 It reads its own source code, assesses itself, makes improvements, and commits — if tests pass. Every session is logged. Every failure is documented. The journey is [published live on GitHub Pages](https://audiohacking.github.io/cocopilot-evolve).
 
@@ -45,19 +45,7 @@ GitHub Actions (every 8 hours)
         └─ actions/deploy-pages  →  GitHub Pages
 ```
 
-The entire history is in the git log. Every improvement goes through a PR. Every session is visible at the public journey site.
-
-## vs. yoyo-evolve
-
-| | yoyo-evolve | cocopilot-evolve |
-|---|---|---|
-| Language | Rust | Python |
-| AI backend | Anthropic (Claude) | GitHub Copilot CLI |
-| API key needed | `ANTHROPIC_API_KEY` (paid) | `COPILOT_PAT` (fine-grained PAT, free) |
-| Binary | `cargo run` | `python3 scripts/evolve.py` |
-| CI checks | `cargo build && cargo test && cargo clippy` | `flake8 && pytest` |
-| PR flow | Direct commit to main | Branch → PR → Copilot review → auto-merge |
-| Journey site | ✅ GitHub Pages | ✅ GitHub Pages |
+Every improvement goes through a PR. Every session is visible at the public journey site.
 
 ## Talk to It
 
