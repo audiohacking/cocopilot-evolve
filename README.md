@@ -16,18 +16,30 @@ Hard-forked from [yoyo-evolve](https://github.com/yologdev/yoyo-evolve) (which u
 
 ```
 GitHub Actions (every 8 hours)
-    → Verify lint + tests pass
-    → Fetch community issues (label: agent-input)
-    → Agent reads: IDENTITY.md, scripts/evolve.py, JOURNAL.md, issues
-    → Self-assessment: find bugs, gaps, friction
-    → Implement improvements using GitHub Copilot (gpt-4o via GitHub Models API)
-    → python3 -m flake8 + pytest after each change
-    → Pass → commit. Fail → revert.
-    → Write journal entry
-    → Push
+    ├─ Job: evolve
+    │   ├─ Create branch: evolution/day-N-HHMM
+    │   ├─ Install Copilot CLI (npm install -g @github/copilot)
+    │   ├─ Build context: CI status, community issues, self-issues
+    │   ├─ Run: copilot -p "PROMPT" --allow-all --autopilot
+    │   │       (Copilot reads/edits files, runs tests, commits)
+    │   ├─ Push branch
+    │   └─ Open PR → main   (with label: evolution)
+    │
+    ├─ Job: review  (runs after evolve)
+    │   ├─ Checkout evolution branch
+    │   ├─ Get diff vs. main
+    │   ├─ Run: copilot -p "Review: [diff]" --no-ask-user
+    │   └─ Post review comment on PR (APPROVED / NEEDS_WORK)
+    │
+    ├─ Workflow: CI  (triggered by PR + branch push)
+    │   ├─ flake8 lint
+    │   └─ pytest tests
+    │
+    └─ Workflow: automerge  (triggered when CI passes on evolution/**)
+        └─ gh pr merge --squash --delete-branch
 ```
 
-The entire history is in the git log.
+The entire history is in the git log. Every improvement goes through a PR.
 
 ## vs. yoyo-evolve
 
@@ -65,13 +77,14 @@ Or trigger manually via the Actions tab → Evolution workflow → Run workflow.
 ## Architecture
 
 ```
-scripts/evolve.py        The entire agent (~400 lines of Python — this is cocopilot)
+scripts/evolve.py        Prompt builder + Copilot CLI launcher (~300 lines)
 scripts/format_issues.py GitHub issues formatter
 .github/workflows/
-  evolve.yml             Evolution pipeline (runs every 8 hours)
-  ci.yml                 CI lint + test check
+  evolve.yml             Evolution pipeline: branch → Copilot → PR → review
+  ci.yml                 CI: flake8 + pytest (runs on PRs and evolution branches)
+  automerge.yml          Auto-merge evolution PRs when CI passes
 skills/                  Skill definitions (evolve, self-assess, communicate)
-tests/                   Agent tests (the agent writes tests for itself)
+tests/                   Tests (the agent writes tests for itself)
 IDENTITY.md              Agent constitution (who cocopilot is)
 JOURNAL.md               Session log (append-only)
 DAY_COUNT                Current evolution day
@@ -79,29 +92,37 @@ DAY_COUNT                Current evolution day
 
 ## How the Copilot Integration Works
 
-cocopilot uses the **GitHub Models API** — an OpenAI-compatible endpoint authenticated via `GITHUB_TOKEN`. In GitHub Actions, every workflow run gets a `GITHUB_TOKEN` for free. No separate API keys or subscriptions needed beyond a GitHub account with Copilot/Models access.
+The **GitHub Copilot CLI** (`@github/copilot` npm package) is installed in GitHub Actions
+and invoked directly — no custom API calls, no OpenAI SDK:
 
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="https://models.inference.ai.azure.com",
-    api_key=os.environ["GITHUB_TOKEN"],
-)
+```bash
+copilot -p "PROMPT" \
+  --allow-all \           # all tools permitted
+  --autopilot \           # autonomous multi-step mode
+  --no-ask-user \         # non-interactive
+  --max-autopilot-continues 40  # safety limit
 ```
 
-The agent implements a full tool-calling loop: it can run bash commands, read/write/edit files, search codebases, and interact with the GitHub CLI — all orchestrated by the model.
+The CLI handles file reading/writing, bash execution, and all AI interactions natively.
+`scripts/evolve.py` just builds the context-rich prompt and calls the CLI.
+
+Authentication uses `COPILOT_GITHUB_TOKEN` — a fine-grained PAT with the
+**"Copilot Requests"** permission. Store it as a repository secret named `COPILOT_PAT`.
 
 ## Configuration
 
-| Variable | Default | Description |
+| Variable | Where | Description |
 |---|---|---|
-| `GITHUB_TOKEN` | (required) | GitHub token (auto-provided in Actions) |
-| `REPO` | `audiohacking/cocopilot-evolve` | GitHub repository slug |
-| `MODEL` | `gpt-4o` | Model to use via GitHub Models API |
-| `TIMEOUT` | `3600` | Max session time in seconds |
+| `COPILOT_PAT` | Repo secret | Fine-grained PAT with **"Copilot Requests"** permission — required |
+| `REPO` | Env var | GitHub repository slug (auto-set by Actions) |
+| `TIMEOUT` | Env var | Max session time in seconds (default: 3300) |
 
-You can set `COPILOT_MODEL` as a repository variable in GitHub to override the model.
+### Setup steps
+
+1. Create a fine-grained PAT at [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new) with **Copilot Requests** permission
+2. Add it as a repo secret named `COPILOT_PAT`
+3. Enable **Auto-merge** in Settings → General → Pull Requests
+4. (Recommended) Add a branch protection rule on `main` requiring the `CI / lint-and-test` check to pass
 
 ## License
 

@@ -55,7 +55,6 @@ class TestFormatIssues:
             },
         ]
         result = _format_issues(issues, "agent-input")
-        # More popular should appear first
         assert result.index("More popular") < result.index("Less popular")
 
     def test_truncates_long_body(self):
@@ -82,11 +81,10 @@ class TestFormatIssues:
             }
         ]
         result = _format_issues(issues, "agent-input")
-        # The agent-input label should be excluded, bug should appear
-        assert "bug" in result
-        lines = [l for l in result.splitlines() if "Labels:" in l]
-        assert lines, "Expected a Labels: line"
-        assert "agent-input" not in lines[0]
+        label_lines = [ln for ln in result.splitlines() if "Labels:" in ln]
+        assert label_lines, "Expected a Labels: line"
+        assert "agent-input" not in label_lines[0]
+        assert "bug" in label_lines[0]
 
     def test_no_label_line_when_empty(self):
         issues = [
@@ -115,6 +113,25 @@ class TestFormatIssues:
         assert "[USER-SUBMITTED CONTENT BEGIN]" in result
         assert "[USER-SUBMITTED CONTENT END]" in result
 
+    def test_multiple_positive_reaction_types(self):
+        """HEART, HOORAY, ROCKET should count as positive reactions."""
+        issues = [
+            {
+                "number": 1,
+                "title": "Reacted issue",
+                "body": "body",
+                "labels": [],
+                "reactionGroups": [
+                    {"content": "THUMBS_UP", "totalCount": 1},
+                    {"content": "HEART", "totalCount": 2},
+                    {"content": "ROCKET", "totalCount": 3},
+                    {"content": "THUMBS_DOWN", "totalCount": 10},  # not counted
+                ],
+            }
+        ]
+        result = _format_issues(issues, "agent-input")
+        assert "👍 6" in result  # 1 + 2 + 3 = 6, THUMBS_DOWN excluded
+
 
 # ── build_prompt ───────────────────────────────────────────────────────────
 
@@ -122,6 +139,15 @@ class TestBuildPrompt:
     def test_contains_day(self):
         prompt = build_prompt(5, "2026-03-10", "08:00", "", "", "", "")
         assert "Day 5" in prompt
+
+    def test_contains_branch(self):
+        prompt = build_prompt(5, "2026-03-10", "08:00", "", "", "", "",
+                              branch="evolution/day-5-0800")
+        assert "branch: evolution/day-5-0800" in prompt.lower()
+
+    def test_default_branch_label(self):
+        prompt = build_prompt(1, "2026-03-05", "10:00", "", "", "", "")
+        assert "evolution" in prompt
 
     def test_ci_section_present_when_failed(self):
         prompt = build_prompt(1, "2026-03-05", "10:00", "FAILED: build error", "", "", "")
@@ -151,15 +177,24 @@ class TestBuildPrompt:
         assert "PHASE 4" in prompt
         assert "PHASE 5" in prompt
 
-    def test_copilot_cli_tool_instructions(self):
-        """Phase 4 must NOT reference the old custom tool functions."""
+    def test_pr_summary_phase_present(self):
+        """Phase 6 must instruct writing EVOLUTION_SUMMARY.md for the PR body."""
         prompt = build_prompt(1, "2026-03-05", "10:00", "", "", "", "")
-        # Should use native git commands, not our old tool_* wrappers
+        assert "PHASE 6" in prompt
+        assert "EVOLUTION_SUMMARY.md" in prompt
+
+    def test_no_push_instruction(self):
+        """The agent must NOT push — the workflow does that."""
+        prompt = build_prompt(1, "2026-03-05", "10:00", "", "", "", "")
+        assert "do not push" in prompt.lower()
+
+    def test_copilot_cli_tool_instructions(self):
+        """Phase 4 must instruct using git commit and running tests natively."""
+        prompt = build_prompt(1, "2026-03-05", "10:00", "", "", "", "")
         assert "git add" in prompt
         assert "git commit" in prompt
-        # Should NOT reference the old Python tool call syntax
-        assert 'bash("git add' not in prompt
-        assert 'bash("python3' not in prompt
+        assert "pytest" in prompt
+        assert "flake8" in prompt
 
     def test_journal_instructions(self):
         prompt = build_prompt(2, "2026-03-07", "14:00", "", "", "", "")
@@ -176,6 +211,5 @@ class TestComputeDay:
         assert day >= 0
 
     def test_increases_over_time(self):
-        """Day count should be at least 0 (born today) and reasonable."""
         day = compute_day()
         assert day < 36500  # sanity: less than 100 years

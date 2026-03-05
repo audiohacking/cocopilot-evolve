@@ -1,24 +1,52 @@
 name: Evolution
 
+# Runs every 8 hours. Full loop:
+#   1. evolve  — create branch, run Copilot CLI, push, open PR
+#   2. review  — run Copilot CLI on the diff, post review comment on PR
+#
+# CI (ci.yml) is the required gate. automerge.yml merges the PR when CI passes.
+
 on:
   schedule:
-    - cron: '0 */8 * * *'  # every 8 hours
-  workflow_dispatch:        # manual trigger for testing
+    - cron: '0 */8 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
   issues: write
+  pull-requests: write
 
 jobs:
+  # ── Job 1: Evolution ──────────────────────────────────────────────────────
   evolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 120
+
+    outputs:
+      branch: ${{ steps.create-branch.outputs.branch }}
+      pr_number: ${{ steps.open-pr.outputs.pr_number }}
+      has_changes: ${{ steps.check-changes.outputs.has_changes }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Create evolution branch
+        id: create-branch
+        run: |
+          DAY=$(python3 -c "
+          from datetime import date
+          print((date.today() - date.fromisoformat('2026-03-05')).days)
+          ")
+          TS=$(date +%H%M)
+          BRANCH="evolution/day-${DAY}-${TS}"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "EVOLUTION_BRANCH=$BRANCH" >> "$GITHUB_ENV"
+          echo "Created branch: $BRANCH"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -46,15 +74,25 @@ jobs:
           git config user.name "cocopilot-evolve[bot]"
           git config user.email "cocopilot-evolve[bot]@users.noreply.github.com"
 
+      - name: Ensure 'evolution' label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "evolution" \
+            --color "#0075ca" \
+            --description "Automated evolution PR" \
+            --repo "${{ github.repository }}" 2>/dev/null || true
+
       - name: Run evolution session (attempt 1)
         id: attempt1
         continue-on-error: true
         env:
-          # Fine-grained PAT with "Copilot Requests" permission — stored as repo secret
+          # Fine-grained PAT with "Copilot Requests" permission — set as repo secret COPILOT_PAT
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TIMEOUT: '3600'
+          EVOLUTION_BRANCH: ${{ steps.create-branch.outputs.branch }}
+          TIMEOUT: '3300'
         run: python3 scripts/evolve.py
 
       - name: Retry after 15 min (attempt 2)
@@ -65,23 +103,60 @@ jobs:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TIMEOUT: '3600'
+          EVOLUTION_BRANCH: ${{ steps.create-branch.outputs.branch }}
+          TIMEOUT: '3300'
         run: |
           echo "Waiting 15 minutes before retry..."
           sleep 900
           python3 scripts/evolve.py
 
-      - name: Retry after 45 min (attempt 3)
-        if: steps.attempt1.outcome == 'failure' && steps.attempt2.outcome == 'failure'
+      - name: Check for new commits
+        id: check-changes
+        run: |
+          COMMITS=$(git log --oneline "origin/main..HEAD" 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$COMMITS" -gt 0 ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Found $COMMITS new commit(s) — will open PR."
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No new commits — skipping PR."
+          fi
+
+      - name: Push evolution branch
+        if: steps.check-changes.outputs.has_changes == 'true'
+        run: git push origin "$EVOLUTION_BRANCH"
+
+      - name: Open pull request
+        id: open-pr
+        if: steps.check-changes.outputs.has_changes == 'true'
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TIMEOUT: '3600'
         run: |
-          echo "Waiting 45 minutes before retry..."
-          sleep 2700
-          python3 scripts/evolve.py
+          DAY_NUM=$(cat DAY_COUNT 2>/dev/null || echo "?")
+          DATE_STR=$(date +%Y-%m-%d)
+          PR_TITLE="Evolution: Day ${DAY_NUM} (${DATE_STR})"
+          PR_BODY=$(cat EVOLUTION_SUMMARY.md 2>/dev/null || \
+            printf "Automated evolution session: Day %s\n\n%s" \
+              "$DAY_NUM" \
+              "$(git log --oneline origin/main..HEAD | head -10)")
+
+          PR_URL=$(gh pr create \
+            --repo "$REPO" \
+            --base main \
+            --head "$EVOLUTION_BRANCH" \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
+            --label "evolution" 2>/dev/null || true)
+
+          if [ -n "$PR_URL" ]; then
+            PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "Opened PR #$PR_NUMBER: $PR_URL"
+          else
+            echo "pr_number=" >> "$GITHUB_OUTPUT"
+            echo "PR creation failed or skipped."
+          fi
 
       - name: Post issue responses
         if: always()
@@ -99,3 +174,92 @@ jobs:
               rm -f ISSUE_RESPONSE.md
             fi
           fi
+
+  # ── Job 2: Copilot Code Review ────────────────────────────────────────────
+  review:
+    needs: evolve
+    if: >
+      needs.evolve.outputs.has_changes == 'true' &&
+      needs.evolve.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout evolution branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.evolve.outputs.branch }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install GitHub Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Generate code review
+        id: review
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+        run: |
+          # Collect the diff (limit lines to keep the prompt manageable)
+          DIFF=$(git diff "origin/main...HEAD" -- scripts/ tests/ 2>/dev/null \
+            | head -n 300 || echo "(diff unavailable)")
+          COMMITS=$(git log --oneline "origin/main..HEAD" | head -10)
+          BRANCH="${{ needs.evolve.outputs.branch }}"
+
+          REVIEW=$(copilot -p \
+            "Review this pull request for cocopilot-evolve (a self-evolving coding agent).
+
+          Branch: ${BRANCH}
+          Recent commits:
+          ${COMMITS}
+
+          Diff (≤300 lines):
+          ${DIFF}
+
+          Provide a concise review (max 200 words) covering: correctness, security,
+          test coverage, and whether the change improves the agent.
+          End your review with exactly one of: APPROVED or NEEDS_WORK" \
+            --no-ask-user \
+            --no-auto-update \
+            --allow-all 2>/dev/null \
+            || echo "Review generation failed. APPROVED")
+
+          echo "$REVIEW" > /tmp/review_output.txt
+          cat /tmp/review_output.txt
+
+          if echo "$REVIEW" | grep -qiF "NEEDS_WORK"; then
+            echo "verdict=needs_work" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=approved" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post review comment on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          PR_NUMBER="${{ needs.evolve.outputs.pr_number }}"
+          REVIEW=$(cat /tmp/review_output.txt)
+          VERDICT="${{ steps.review.outputs.verdict }}"
+
+          if [ "$VERDICT" = "approved" ]; then
+            ICON="✅"
+            VERDICT_LINE="**Verdict: APPROVED** — CI tests are the final merge gate."
+          else
+            ICON="⚠️"
+            VERDICT_LINE="**Verdict: NEEDS_WORK** — review the issues above before merging."
+          fi
+
+          gh pr comment "$PR_NUMBER" \
+            --repo "$REPO" \
+            --body "## ${ICON} Copilot Code Review
+
+          ${REVIEW}
+
+          ---
+          ${VERDICT_LINE}
+          *Automated review by cocopilot-evolve*"

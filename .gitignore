@@ -26,3 +26,4 @@ env/
 # Agent runtime files (generated during evolution sessions)
 ISSUES_TODAY.md
 ISSUE_RESPONSE.md
+EVOLUTION_SUMMARY.md
