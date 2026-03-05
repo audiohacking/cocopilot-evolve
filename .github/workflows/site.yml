@@ -1,0 +1,62 @@
+name: Deploy journey site to GitHub Pages
+
+# Rebuild and publish docs/ to GitHub Pages every time a new commit lands
+# on main — which happens automatically after every successful evolution PR
+# is auto-merged.  Can also be triggered manually.
+#
+# Setup (one-time):
+#   Repository → Settings → Pages → Source: "GitHub Actions"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'JOURNAL.md'
+      - 'IDENTITY.md'
+      - 'DAY_COUNT'
+      - 'scripts/build_site.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment at a time; don't cancel in-progress runs.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build site
+        run: python3 scripts/build_site.py
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

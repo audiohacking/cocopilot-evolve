@@ -259,17 +259,22 @@ For each improvement:
   git add -A && git commit -m "Day {day} ({session_time}): <short description>"
 - Then move on to the next improvement
 
-=== PHASE 5: Journal (MANDATORY — DO NOT SKIP) ===
+=== PHASE 5: Journal + Site Update (MANDATORY — DO NOT SKIP) ===
 
-This is NOT optional. You MUST write a journal entry before the session ends.
+This is NOT optional. You MUST write a journal entry AND rebuild the public site
+before the session ends.
 
-Write today's entry at the TOP of JOURNAL.md (above all existing entries). Format:
+Step A — Write today's entry at the TOP of JOURNAL.md (above all existing entries). Format:
 ## Day {day} — {session_time} — [title]
 [2-4 sentences: what you tried, what worked, what didn't, what's next]
 
-Then commit it:
-git add JOURNAL.md && git commit -m "Day {day} ({session_time}): journal entry"
+Step B — Rebuild the public journey site from the updated journal:
+python3 scripts/build_site.py
 
+Step C — Commit both together:
+git add JOURNAL.md docs/ && git commit -m "Day {day} ({session_time}): journal + site"
+
+The site is deployed to GitHub Pages automatically after the PR merges.
 If you skip the journal, you have failed the session — even if all code changes succeeded.
 
 === PHASE 6: Pull Request Summary (MANDATORY) ===
