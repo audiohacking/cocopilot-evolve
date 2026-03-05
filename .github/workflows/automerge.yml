@@ -1,0 +1,66 @@
+name: Auto-merge evolution PRs
+
+# Triggered when the CI workflow completes. If CI passed on an evolution
+# branch, find the open PR for that branch and merge it with a squash commit.
+#
+# Requirements:
+#   - Auto-merge must be enabled in repository Settings → General → Pull Requests
+#   - Branch protection rule on main requiring "CI / lint-and-test" to pass
+#     is recommended but not required — this workflow checks CI conclusion directly.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    # Only merge when CI passed on an evolution branch
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'evolution/')
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Find and merge evolution PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          echo "CI passed on branch: $BRANCH"
+
+          # Find the open PR for this branch
+          PR_NUMBER=$(gh pr list \
+            --repo "$REPO" \
+            --head "$BRANCH" \
+            --state open \
+            --json number \
+            --jq '.[0].number' 2>/dev/null)
+
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+            echo "No open PR found for branch $BRANCH — skipping."
+            exit 0
+          fi
+
+          echo "Found PR #$PR_NUMBER — merging..."
+
+          PR_TITLE=$(gh pr view "$PR_NUMBER" \
+            --repo "$REPO" \
+            --json title \
+            --jq '.title' 2>/dev/null)
+
+          gh pr merge "$PR_NUMBER" \
+            --repo "$REPO" \
+            --squash \
+            --delete-branch \
+            --subject "$PR_TITLE" \
+            --body "Auto-merged after CI passed. ✅" \
+            || { echo "Merge failed — branch protection or review rules may be blocking it."; exit 0; }
+
+          echo "Merged PR #$PR_NUMBER."
