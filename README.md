@@ -124,11 +124,25 @@ The CLI handles file reading/writing, bash execution, and all AI interactions na
 Authentication uses `COPILOT_GITHUB_TOKEN` — a fine-grained PAT with the
 **"Copilot Requests"** permission. Store it as a repository secret named `COPILOT_PAT`.
 
+### Why a PAT is required (not `GITHUB_TOKEN`)
+
+The automatically-provided `GITHUB_TOKEN` in GitHub Actions **cannot** be used for Copilot
+CLI requests. This is a hard GitHub platform limitation: `GITHUB_TOKEN` does not have
+permission to create Copilot agent sessions.
+
+This is confirmed by GitHub's own [gh-aw source code](https://github.com/github/gh-aw/blob/main/pkg/workflow/github_token.go):
+
+> *The default `GITHUB_TOKEN` is NOT included as a fallback because it does not have
+> permission to create agent sessions, assign issues to bots, or add bots as reviewers.*
+
+A separate fine-grained PAT with the **"Copilot Requests"** permission is the only known-working
+method. This is a one-time setup step per repository and costs nothing beyond a Copilot subscription.
+
 ## Configuration
 
 | Variable | Where | Description |
 |---|---|---|
-| `COPILOT_PAT` | Repo secret | Fine-grained PAT with **"Copilot Requests"** permission — required |
+| `COPILOT_PAT` | Repo secret | Fine-grained PAT with **"Copilot Requests"** permission — required (cannot use `GITHUB_TOKEN`) |
 | `REPO` | Env var | GitHub repository slug (auto-set by Actions) |
 | `TIMEOUT` | Env var | Max session time in seconds (default: 3300) |
 | `AUTOPILOT_MAX_CONTINUES` | Env var | Copilot CLI autopilot steps limit (default: 40) |

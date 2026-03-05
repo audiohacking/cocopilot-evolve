@@ -83,11 +83,29 @@ jobs:
             --description "Automated evolution PR" \
             --repo "${{ github.repository }}" 2>/dev/null || true
 
+      - name: Validate secrets
+        run: |
+          if [ -z "$COPILOT_PAT" ]; then
+            echo "::error::COPILOT_PAT secret is not set."
+            echo "::error::The GitHub Actions GITHUB_TOKEN cannot be used for Copilot CLI requests."
+            echo "::error::This is a GitHub platform limitation — GITHUB_TOKEN lacks the Copilot Requests permission."
+            echo "::error::Create a fine-grained PAT with 'Copilot Requests' permission and add it as repo secret COPILOT_PAT."
+            echo "::error::See README.md → Configuration for full setup instructions."
+            exit 1
+          fi
+          echo "COPILOT_PAT is set — proceeding."
+        env:
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
+
       - name: Run evolution session (attempt 1)
         id: attempt1
         continue-on-error: true
         env:
-          # Fine-grained PAT with "Copilot Requests" permission — set as repo secret COPILOT_PAT
+          # A fine-grained PAT with "Copilot Requests" permission is required here.
+          # GITHUB_TOKEN cannot be used — it does not have permission to create Copilot
+          # agent sessions. This is a GitHub platform limitation, not a design choice.
+          # Reference: github/gh-aw source code (getEffectiveCopilotRequestsToken).
+          # Setup: create a fine-grained PAT → store as repo secret COPILOT_PAT.
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -100,6 +118,7 @@ jobs:
         if: steps.attempt1.outcome == 'failure'
         continue-on-error: true
         env:
+          # Same PAT requirement as attempt 1 — GITHUB_TOKEN cannot be used for Copilot requests.
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -202,6 +221,7 @@ jobs:
       - name: Generate code review
         id: review
         env:
+          # Same PAT requirement — GITHUB_TOKEN cannot be used for Copilot requests.
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
         run: |
           # Collect the diff (limit lines to keep the prompt manageable)
